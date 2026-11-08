@@ -24,6 +24,17 @@ python hockey_arcade.py
 | R | Play again (from game-over screen) |
 | Esc | Quit |
 
+## Building a standalone executable
+
+To produce a double-click-able `.exe` with no Python install required (for sharing or uploading to itch.io):
+
+```
+pip install -r requirements.txt pyinstaller
+pyinstaller --onefile --windowed --name HockeyArcade hockey_arcade.py
+```
+
+The executable lands in `dist/HockeyArcade.exe`.
+
 ## Features
 
 - Behind-the-boards chase camera projecting a top-down simulation into 3rd-person
