@@ -1012,8 +1012,19 @@ class ArcadeGame:
 
         labels = {"shoot": "SHOOT", "deke": "DEKE", "check": "CHECK", "sprint": "SPR"}
         pressed_names = set(self.active_touches.values())
+        pulse = 0.5 + 0.5 * abs(math.sin(pygame.time.get_ticks() / 220.0))
         for name, (bx, by) in self._touch_button_positions().items():
-            alpha = 170 if name in pressed_names else 80
+            pressed = name in pressed_names
+            if pressed:
+                # soft pulsing aura behind the button while held, same layered-alpha
+                # approach as the puck-carrier aura - drawn first so the button sits on top
+                glow_r = int(TOUCH_BUTTON_RADIUS * 1.6)
+                glow = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+                for mult, base_alpha in ((1.0, 40), (0.7, 70), (0.45, 100)):
+                    a = int(base_alpha * (0.6 + 0.4 * pulse))
+                    pygame.draw.circle(glow, (*GOLD, a), (glow_r, glow_r), max(1, int(glow_r * mult)))
+                self.screen.blit(glow, (bx - glow_r, by - glow_r))
+            alpha = 170 if pressed else 80
             btn = pygame.Surface((TOUCH_BUTTON_RADIUS * 2, TOUCH_BUTTON_RADIUS * 2), pygame.SRCALPHA)
             pygame.draw.circle(btn, (*GOLD, alpha), (TOUCH_BUTTON_RADIUS, TOUCH_BUTTON_RADIUS), TOUCH_BUTTON_RADIUS)
             pygame.draw.circle(btn, (255, 255, 255, 180), (TOUCH_BUTTON_RADIUS, TOUCH_BUTTON_RADIUS), TOUCH_BUTTON_RADIUS, 2)
@@ -1333,8 +1344,20 @@ class ArcadeGame:
         top_y = self._draw_human_figure(skater, sx, sy, r_px, scale, speed_ratio)
 
         if self.puck.carrier is skater:
+            # soft pulsing team-colored aura behind a crisp gold ring, instead of a flat
+            # white outline - layered on a separate SRCALPHA surface since pygame.draw
+            # ignores alpha when drawn straight onto the opaque main screen surface
+            pulse = 0.5 + 0.5 * abs(math.sin(pygame.time.get_ticks() / 260.0))
             glow_center = (sx, sy - r_px * 2.0)
-            pygame.draw.circle(self.screen, (255, 255, 255), glow_center, r_px * 1.5 + max(2, 4 * scale), max(1, int(2 * scale)))
+            aura_color = TEAM_HOME if skater.team == "left" else TEAM_AWAY
+            base_r = r_px * 1.5 + max(2, 4 * scale)
+            glow_r = max(1, int(base_r * 1.15))  # just past the ring itself - a halo, not a blob
+            glow_surf = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+            for mult, alpha in ((1.0, 35), (0.75, 55), (0.5, 80)):
+                a = int(alpha * (0.6 + 0.4 * pulse))
+                pygame.draw.circle(glow_surf, (*aura_color, a), (glow_r, glow_r), max(1, int(glow_r * mult)))
+            self.screen.blit(glow_surf, (glow_center[0] - glow_r, glow_center[1] - glow_r))
+            pygame.draw.circle(self.screen, GOLD, glow_center, base_r * (0.95 + 0.1 * pulse), max(1, int(2 * scale)))
 
         if skater.label:
             tag = skater.label if skater.is_goalie else f"{skater.label} #{skater.jersey_number}"
