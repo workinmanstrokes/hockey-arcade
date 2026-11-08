@@ -1,7 +1,8 @@
 """
-Hockey RPG - true arcade-style real-time version.
-Control a skater (WASD/arrows), shoot with Space, play 3 periods against an AI team.
+Mutant Hockey League - true arcade-style real-time hockey, mutant-monster edition.
+Control a skater (WASD/arrows, or touch), shoot with Space, play 3 periods against an AI team.
 """
+import asyncio
 import math
 import random
 import sys
@@ -173,13 +174,22 @@ GOAL_DEPTH = 16
 
 WHITE = (240, 240, 245)
 BLACK = (10, 10, 14)
-ICE = (205, 225, 245)
-BOARD = (40, 50, 70)
-RED = (210, 70, 70)
-BLUE = (60, 120, 220)
+ICE = (198, 218, 202)  # faint toxic-green tint instead of clean blue-white
+BOARD = (48, 42, 38)  # grimy brown-grey instead of blue-grey
+RED = (210, 70, 70)  # rink line/marking color - NOT a team color, left alone for readability
+BLUE = (60, 120, 220)  # rink line/marking color - NOT a team color, left alone for readability
 GOLD = (220, 180, 60)
 PUCK_COLOR = (20, 20, 20)
-GOAL_COLOR = (180, 180, 190)
+GOAL_COLOR = (182, 178, 165)
+
+# mutant jersey colors - home (acid green) vs away (blood red); _LIGHT for teammates,
+# _DARK for the goalie and goal-crease tint, mirroring the original BLUE/RED shade spread
+TEAM_HOME = (120, 210, 70)
+TEAM_HOME_LIGHT = (160, 225, 110)
+TEAM_HOME_DARK = (70, 140, 40)
+TEAM_AWAY = (195, 55, 60)
+TEAM_AWAY_LIGHT = (225, 100, 95)
+TEAM_AWAY_DARK = (130, 30, 35)
 
 PERIOD_SECONDS = 60  # arcade-length period
 PICKUP_RADIUS = 20
@@ -189,6 +199,22 @@ CHECK_RADIUS = 26
 CHECK_COOLDOWN_FRAMES = 40
 BATTLE_THRESHOLD = 8.0
 GOAL_REPLAY_FRAMES = 90  # freeze/zoom celebration beat after a goal, before faceoff resets
+
+# ---------- on-screen touch controls (mobile/touchscreen play) ----------
+# A pointer (mouse OR a finger, tracked per touch-id so one thumb on the
+# joystick and another on a button work independently) feeds the exact same
+# move-vector/sprint-flag inputs keyboard already produces in step() - touch
+# is just an additional input source, never a separate control path.
+TOUCH_JOYSTICK_CENTER = (90, HEIGHT - 90)
+TOUCH_JOYSTICK_RADIUS = 55
+TOUCH_BUTTON_RADIUS = 32
+TOUCH_BUTTON_CLUSTER = (WIDTH - 110, HEIGHT - 90)
+TOUCH_BUTTONS = {  # name -> (dx, dy) offset from TOUCH_BUTTON_CLUSTER
+    "shoot": (0, 0),
+    "deke": (-72, -22),
+    "check": (72, -22),
+    "sprint": (0, -78),
+}
 
 
 def clamp(v, lo, hi):
@@ -461,19 +487,19 @@ def make_teams(user_stats):
     user_steal = 0.3 + user_stats["defense"] * 0.02
 
     user = Skater(
-        "left", RINK_LEFT + 120, HEIGHT / 2, BLUE,
+        "left", RINK_LEFT + 120, HEIGHT / 2, TEAM_HOME,
         speed=user_speed, shot_power=user_shot, steal=user_steal,
         is_user=True, label="YOU",
     )
     left.append(user)
-    left.append(Skater("left", RINK_LEFT + 180, HEIGHT / 2 - 100, (90, 140, 230), speed=2.6, shot_power=7, steal=0.4, label="CPU"))
-    left.append(Skater("left", RINK_LEFT + 180, HEIGHT / 2 + 100, (90, 140, 230), speed=2.6, shot_power=7, steal=0.4, label="CPU"))
-    left.append(Skater("left", RINK_LEFT + 20, HEIGHT / 2, (40, 80, 170), speed=2.0, shot_power=0, steal=0.5, is_goalie=True, label="G"))
+    left.append(Skater("left", RINK_LEFT + 180, HEIGHT / 2 - 100, TEAM_HOME_LIGHT, speed=2.6, shot_power=7, steal=0.4, label="CPU"))
+    left.append(Skater("left", RINK_LEFT + 180, HEIGHT / 2 + 100, TEAM_HOME_LIGHT, speed=2.6, shot_power=7, steal=0.4, label="CPU"))
+    left.append(Skater("left", RINK_LEFT + 20, HEIGHT / 2, TEAM_HOME_DARK, speed=2.0, shot_power=0, steal=0.5, is_goalie=True, label="G"))
 
-    right.append(Skater("right", RINK_RIGHT - 150, HEIGHT / 2, RED, speed=2.6, shot_power=7, steal=0.45, label="CPU"))
-    right.append(Skater("right", RINK_RIGHT - 220, HEIGHT / 2 - 100, (230, 100, 100), speed=2.5, shot_power=6.5, steal=0.4, label="CPU"))
-    right.append(Skater("right", RINK_RIGHT - 220, HEIGHT / 2 + 100, (230, 100, 100), speed=2.5, shot_power=6.5, steal=0.4, label="CPU"))
-    right.append(Skater("right", RINK_RIGHT - 20, HEIGHT / 2, (170, 50, 50), speed=2.0, shot_power=0, steal=0.5, is_goalie=True, label="G"))
+    right.append(Skater("right", RINK_RIGHT - 150, HEIGHT / 2, TEAM_AWAY, speed=2.6, shot_power=7, steal=0.45, label="CPU"))
+    right.append(Skater("right", RINK_RIGHT - 220, HEIGHT / 2 - 100, TEAM_AWAY_LIGHT, speed=2.5, shot_power=6.5, steal=0.4, label="CPU"))
+    right.append(Skater("right", RINK_RIGHT - 220, HEIGHT / 2 + 100, TEAM_AWAY_LIGHT, speed=2.5, shot_power=6.5, steal=0.4, label="CPU"))
+    right.append(Skater("right", RINK_RIGHT - 20, HEIGHT / 2, TEAM_AWAY_DARK, speed=2.0, shot_power=0, steal=0.5, is_goalie=True, label="G"))
 
     return left, right
 
@@ -599,7 +625,7 @@ class ArcadeGame:
         self.user_stats = user_stats or {"shooting": 5, "skating": 5, "defense": 5}
         pygame.init()
         pygame.mixer.init(frequency=AUDIO_SAMPLE_RATE, size=-16, channels=2, buffer=512)
-        pygame.display.set_caption("Hockey RPG - Arcade")
+        pygame.display.set_caption("Mutant Hockey League")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("consolas", 20)
@@ -609,6 +635,11 @@ class ArcadeGame:
         self.sounds = build_sound_bank()
         self.music_channel = pygame.mixer.Channel(0)
         self.ambience_channel = pygame.mixer.Channel(1)
+
+        # UI-level input state, not gameplay state - persists across goals/restarts
+        self.active_touches = {}  # touch_id -> "joystick" or a TOUCH_BUTTONS name
+        self.touch_move = Vector2(0, 0)
+        self.touch_sprint = False
 
         self.start_new_game()
         self.enter_state("TITLE")
@@ -739,6 +770,10 @@ class ArcadeGame:
         # defensive strafing: hold Ctrl to keep facing the puck while moving freely in
         # any direction - lets you shadow a puck carrier sideways without turning away.
         strafe_held = keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]
+
+        move += self.touch_move
+        sprint_held = sprint_held or self.touch_sprint
+
         user = self.user_skater()
         strafe_target = self.puck.pos if strafe_held else None
         user.update_movement(move, sprint=sprint_held, strafe_target=strafe_target)
@@ -910,6 +945,82 @@ class ArcadeGame:
                 self.shake_camera(4, 10)
                 self.sounds["check"].play()
 
+    def _touch_button_positions(self):
+        cx, cy = TOUCH_BUTTON_CLUSTER
+        return {name: (cx + dx, cy + dy) for name, (dx, dy) in TOUCH_BUTTONS.items()}
+
+    def _press_touch_button(self, name):
+        if self.state != "PLAYING":
+            return
+        if name == "shoot":
+            self.user_shoot()
+        elif name == "deke":
+            self.user_deke()
+        elif name == "check":
+            self.user_check()
+        elif name == "sprint":
+            self.touch_sprint = True
+
+    def handle_touch_start(self, touch_id, pos):
+        if self.state == "TITLE":
+            self.enter_state("PLAYING")
+            return
+        if self.state == "GAME_OVER":
+            self.start_new_game()
+            return
+        x, y = pos
+        jx, jy = TOUCH_JOYSTICK_CENTER
+        if (x - jx) ** 2 + (y - jy) ** 2 <= (TOUCH_JOYSTICK_RADIUS * 1.6) ** 2:
+            self.active_touches[touch_id] = "joystick"
+            self.touch_move = Vector2(0, 0)
+            return
+        for name, (bx, by) in self._touch_button_positions().items():
+            if (x - bx) ** 2 + (y - by) ** 2 <= TOUCH_BUTTON_RADIUS ** 2:
+                self.active_touches[touch_id] = name
+                self._press_touch_button(name)
+                return
+
+    def handle_touch_drag(self, touch_id, pos):
+        if self.active_touches.get(touch_id) != "joystick":
+            return
+        jx, jy = TOUCH_JOYSTICK_CENTER
+        delta = Vector2(pos[0] - jx, pos[1] - jy)
+        if delta.length() > TOUCH_JOYSTICK_RADIUS:
+            delta.scale_to_length(TOUCH_JOYSTICK_RADIUS)
+        self.touch_move = delta / TOUCH_JOYSTICK_RADIUS
+
+    def handle_touch_end(self, touch_id):
+        held = self.active_touches.pop(touch_id, None)
+        if held == "joystick":
+            self.touch_move = Vector2(0, 0)
+        elif held == "sprint":
+            self.touch_sprint = False
+
+    def draw_touch_controls(self):
+        jx, jy = TOUCH_JOYSTICK_CENTER
+        base = pygame.Surface((TOUCH_JOYSTICK_RADIUS * 2, TOUCH_JOYSTICK_RADIUS * 2), pygame.SRCALPHA)
+        pygame.draw.circle(base, (255, 255, 255, 60), (TOUCH_JOYSTICK_RADIUS, TOUCH_JOYSTICK_RADIUS), TOUCH_JOYSTICK_RADIUS)
+        pygame.draw.circle(base, (255, 255, 255, 130), (TOUCH_JOYSTICK_RADIUS, TOUCH_JOYSTICK_RADIUS), TOUCH_JOYSTICK_RADIUS, 2)
+        self.screen.blit(base, (jx - TOUCH_JOYSTICK_RADIUS, jy - TOUCH_JOYSTICK_RADIUS))
+
+        knob_r = TOUCH_JOYSTICK_RADIUS * 0.4
+        knob = pygame.Surface((knob_r * 2, knob_r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(knob, (255, 255, 255, 190), (knob_r, knob_r), knob_r)
+        knob_cx = jx + self.touch_move.x * TOUCH_JOYSTICK_RADIUS * 0.6
+        knob_cy = jy + self.touch_move.y * TOUCH_JOYSTICK_RADIUS * 0.6
+        self.screen.blit(knob, (knob_cx - knob_r, knob_cy - knob_r))
+
+        labels = {"shoot": "SHOOT", "deke": "DEKE", "check": "CHECK", "sprint": "SPR"}
+        pressed_names = set(self.active_touches.values())
+        for name, (bx, by) in self._touch_button_positions().items():
+            alpha = 170 if name in pressed_names else 80
+            btn = pygame.Surface((TOUCH_BUTTON_RADIUS * 2, TOUCH_BUTTON_RADIUS * 2), pygame.SRCALPHA)
+            pygame.draw.circle(btn, (*GOLD, alpha), (TOUCH_BUTTON_RADIUS, TOUCH_BUTTON_RADIUS), TOUCH_BUTTON_RADIUS)
+            pygame.draw.circle(btn, (255, 255, 255, 180), (TOUCH_BUTTON_RADIUS, TOUCH_BUTTON_RADIUS), TOUCH_BUTTON_RADIUS, 2)
+            self.screen.blit(btn, (bx - TOUCH_BUTTON_RADIUS, by - TOUCH_BUTTON_RADIUS))
+            label = self.small_font.render(labels[name], True, WHITE)
+            self.screen.blit(label, label.get_rect(center=(bx, by)))
+
     def proj(self, world_pos):
         result = self.camera.project(world_pos)
         if result is None:
@@ -923,18 +1034,30 @@ class ArcadeGame:
     def build_crowd_texture(self):
         crowd_texture = pygame.Surface((WIDTH, HORIZON_Y), pygame.SRCALPHA)
 
+        # grim arena backdrop: dark bruise-purple up top fading toward a sickly
+        # toxic-green near the horizon - stays dark/moody throughout rather than
+        # brightening into a sky, so it reads as an ominous indoor arena
         for i in range(HORIZON_Y):
             t = i / HORIZON_Y
-            shade = (int(20 + 18 * t), int(14 + 14 * t), int(28 + 22 * t))
+            shade = (int(22 + 10 * t), int(10 + 22 * t), int(30 - 14 * t))
             pygame.draw.line(crowd_texture, shade, (0, i), (WIDTH, i))
         for sx in range(0, WIDTH, 26):
-            pygame.draw.rect(crowd_texture, (40, 30, 55), (sx, HORIZON_Y - 55, 16, 55))
+            pygame.draw.rect(crowd_texture, (40, 30, 42), (sx, HORIZON_Y - 55, 16, 55))
+
+        # a handful of sections flicker with a dim torch-like red/green glow,
+        # blended over the section color rather than replacing it outright
+        flicker_sx = random.sample(range(0, WIDTH, 26), k=min(6, WIDTH // 26))
+        for sx in flicker_sx:
+            glow_color = (200, 40, 40) if random.random() < 0.5 else (60, 180, 70)
+            glow = pygame.Surface((16, 55), pygame.SRCALPHA)
+            glow.fill((*glow_color, 90))
+            crowd_texture.blit(glow, (sx, HORIZON_Y - 55))
 
         base_hues = [
-            (60, 90, 150),   # dim blue
-            (140, 70, 70),   # dim red
-            (150, 120, 60),  # dim gold
-            (90, 90, 95),    # grey
+            (90, 200, 70),    # toxic green
+            (100, 50, 130),   # bruise purple
+            (190, 185, 165),  # bone
+            (150, 20, 25),    # blood red
         ]
         for _ in range(300):
             x = random.randint(0, WIDTH - 2)
@@ -1009,8 +1132,8 @@ class ArcadeGame:
                     sx, sy, scale, _ = dp
                     pygame.draw.circle(self.screen, RED, (int(sx), int(sy)), max(1, int(5 * scale)))
 
-        self.draw_goal_billboard(RINK_LEFT, (90, 160, 230))
-        self.draw_goal_billboard(RINK_RIGHT, (230, 90, 90))
+        self.draw_goal_billboard(RINK_LEFT, TEAM_HOME_LIGHT)
+        self.draw_goal_billboard(RINK_RIGHT, TEAM_AWAY_LIGHT)
 
     def draw_ground_polyline(self, world_y, color, width):
         points = []
@@ -1054,14 +1177,14 @@ class ArcadeGame:
             pygame.draw.line(panel, (shade, shade + 2, shade + 10, 210), (0, y), (WIDTH, y))
         self.screen.blit(panel, (0, 0))
 
-        you_label = self.big_font.render(str(self.score["left"]), True, BLUE)
-        cpu_label = self.big_font.render(str(self.score["right"]), True, RED)
+        you_label = self.big_font.render(str(self.score["left"]), True, TEAM_HOME)
+        cpu_label = self.big_font.render(str(self.score["right"]), True, TEAM_AWAY)
         dash = self.big_font.render("-", True, WHITE)
-        self.screen.blit(self.font.render("YOU", True, BLUE), (WIDTH / 2 - 150, 24))
+        self.screen.blit(self.font.render("YOU", True, TEAM_HOME), (WIDTH / 2 - 150, 24))
         self.screen.blit(you_label, (WIDTH / 2 - 100, 14))
         self.screen.blit(dash, (WIDTH / 2 - 8, 14))
         self.screen.blit(cpu_label, (WIDTH / 2 + 30, 14))
-        self.screen.blit(self.font.render("CPU", True, RED), (WIDTH / 2 + 80, 24))
+        self.screen.blit(self.font.render("CPU", True, TEAM_AWAY), (WIDTH / 2 + 80, 24))
 
         seconds = max(0, self.time_left // FPS)
         clock_rect = pygame.Rect(16, 10, 90, 34)
@@ -1223,10 +1346,14 @@ class ArcadeGame:
             self.screen.blit(spark, (sx + r_px, sy - r_px * 3.4))
 
     def _draw_human_figure(self, skater, sx, sy, r_px, scale, speed_ratio):
-        """Draws a simple stylized skater (helmet, jersey torso, skating legs, stick) as a
-        screen-space billboard anchored at the ground point (sx, sy). Returns the head's top y."""
+        """Draws a stylized mutant skater (horned skull, spiked jersey, clawed stick hand,
+        skating legs) as a screen-space billboard anchored at the ground point (sx, sy).
+        Returns the head's top y (above the horns, so name tags clear them)."""
         color = GOLD if skater.is_user else skater.color
         outline_w = max(1, int(2 * scale))
+        bone_color = (195, 195, 180)
+        detailed = r_px > 4  # skip spike/claw/horn detail on tiny/distant billboards - a
+        # colored blob at long range already reads fine, and this is per-skater-per-frame
 
         leg_len = r_px * 1.9
         torso_h = r_px * 1.9
@@ -1249,30 +1376,54 @@ class ArcadeGame:
         pygame.draw.circle(self.screen, (15, 15, 18), foot_l, max(1, leg_w * 0.55))
         pygame.draw.circle(self.screen, (15, 15, 18), foot_r, max(1, leg_w * 0.55))
 
-        # torso (jersey), slightly stretched when sprinting and tilted into turns
-        torso_surf = pygame.Surface((max(2, int(torso_w)), max(2, int(torso_h))), pygame.SRCALPHA)
-        pygame.draw.rect(torso_surf, color, torso_surf.get_rect(), border_radius=max(1, int(torso_w * 0.3)))
-        pygame.draw.rect(torso_surf, BLACK, torso_surf.get_rect(), width=outline_w, border_radius=max(1, int(torso_w * 0.3)))
+        # torso (jersey) with jagged shoulder spikes, drawn onto its own surface - sized
+        # with headroom above the body rect so the spikes aren't clipped by the surface's
+        # own edge - so the spikes rotate together with the torso when it tilts into turns
+        spike_margin = torso_h * 0.22 if detailed else 0
+        torso_surf = pygame.Surface((max(2, int(torso_w)), max(2, int(torso_h + spike_margin))), pygame.SRCALPHA)
+        body_rect = pygame.Rect(0, spike_margin, torso_w, torso_h)
+        pygame.draw.rect(torso_surf, color, body_rect, border_radius=max(1, int(torso_w * 0.3)))
+        pygame.draw.rect(torso_surf, BLACK, body_rect, width=outline_w, border_radius=max(1, int(torso_w * 0.3)))
+        if detailed:
+            for spike_x in (torso_w * 0.15, torso_w * 0.5, torso_w * 0.85):
+                pygame.draw.polygon(
+                    torso_surf, bone_color,
+                    [(spike_x - torso_w * 0.08, spike_margin), (spike_x + torso_w * 0.08, spike_margin), (spike_x, 0)],
+                )
         tilt = skater.lean * 9
         rotated_torso = pygame.transform.rotate(torso_surf, tilt)
-        torso_center = (sx, (hip_y + shoulder_y) / 2)
+        # the extra headroom shifts the surface's own center above the body's true center -
+        # offset back down by half the margin so the body still lines up with hip_y/shoulder_y
+        torso_center = (sx, (hip_y + shoulder_y) / 2 + spike_margin / 2)
         self.screen.blit(rotated_torso, rotated_torso.get_rect(center=torso_center))
 
-        # arms + stick, angled toward the puck side
+        # arm + clawed hand gripping the stick, angled toward the puck side
         stick_color = (90, 65, 40)
         shoulder_x_off = torso_w * 0.42
         arm_end = (sx + shoulder_x_off * 1.6, hip_y + leg_len * 0.1)
         pygame.draw.line(self.screen, color, (sx - shoulder_x_off, shoulder_y + torso_h * 0.2), arm_end, max(1, int(r_px * 0.28)))
+        if detailed:
+            claw_len = r_px * 0.35
+            for claw_angle in (-30, 0, 30):
+                tip = Vector2(claw_len, 0).rotate(claw_angle) + arm_end
+                pygame.draw.line(self.screen, bone_color, arm_end, tip, max(1, int(r_px * 0.1)))
         stick_tip = (arm_end[0] + r_px * 0.9, sy - r_px * 0.1)
         pygame.draw.line(self.screen, stick_color, arm_end, stick_tip, max(1, int(r_px * 0.18)))
 
-        # head / helmet
-        helmet_color = (25, 25, 30) if not skater.is_user else (90, 60, 10)
-        pygame.draw.circle(self.screen, helmet_color, (sx, head_cy), head_r)
+        # head: lumpy bone-colored skull instead of a human helmet, with two curved horns
+        pygame.draw.circle(self.screen, bone_color, (sx, head_cy), head_r)
         pygame.draw.circle(self.screen, color, (sx, head_cy), head_r * 0.72)
         pygame.draw.circle(self.screen, BLACK, (sx, head_cy), head_r, outline_w)
+        top_y = head_cy - head_r
+        if detailed:
+            for horn_side in (-1, 1):
+                horn_base = Vector2(sx + horn_side * head_r * 0.55, head_cy - head_r * 0.6)
+                horn_tip = Vector2(sx + horn_side * head_r * 1.1, head_cy - head_r * 1.3)
+                horn_out = Vector2(horn_side * head_r * 0.22, 0)
+                pygame.draw.polygon(self.screen, bone_color, [horn_base - horn_out, horn_base + horn_out, horn_tip])
+            top_y = head_cy - head_r * 1.3
 
-        return head_cy - head_r
+        return top_y
 
     def _draw_puck_billboard(self, sx, sy, scale):
         if scale <= 0.01:
@@ -1296,13 +1447,13 @@ class ArcadeGame:
         self.screen.blit(title, title.get_rect(center=(WIDTH / 2, 220)))
         self.screen.blit(result, result.get_rect(center=(WIDTH / 2, 280)))
         self.screen.blit(sub, sub.get_rect(center=(WIDTH / 2, 320)))
-        hint = self.font.render("Press R to play again, ESC to quit", True, (160, 160, 170))
+        hint = self.font.render("Press R or tap to play again, ESC to quit", True, (160, 160, 170))
         self.screen.blit(hint, hint.get_rect(center=(WIDTH / 2, 380)))
 
     def draw_title(self):
         self.screen.fill(BLACK)
-        title = self.big_font.render("HOCKEY ARCADE", True, GOLD)
-        subtitle = self.font.render("Behind-the-boards 3rd-person hockey", True, WHITE)
+        title = self.big_font.render("MUTANT HOCKEY LEAGUE", True, GOLD)
+        subtitle = self.font.render("Behind-the-boards 3rd-person hockey. No refs. No mercy.", True, WHITE)
         controls = [
             self.font.render("WASD / Arrows: Skate", True, (160, 160, 170)),
             self.font.render("Shift: Sprint", True, (160, 160, 170)),
@@ -1310,15 +1461,16 @@ class ArcadeGame:
             self.font.render("E or F: Deke", True, (160, 160, 170)),
             self.font.render("C: Check", True, (160, 160, 170)),
             self.font.render("Ctrl: Strafe (face the puck while moving freely)", True, (160, 160, 170)),
+            self.font.render("Touch/mouse: on-screen joystick + buttons also work", True, (160, 160, 170)),
         ]
-        start_prompt = self.big_font.render("Press ENTER to start", True, GOLD)
+        start_prompt = self.big_font.render("Press ENTER or tap to start", True, GOLD)
         start_prompt.set_alpha(int(150 + 105 * abs(math.sin(pygame.time.get_ticks() / 1000.0))))
 
         self.screen.blit(title, title.get_rect(center=(WIDTH / 2, 90)))
         self.screen.blit(subtitle, subtitle.get_rect(center=(WIDTH / 2, 135)))
         for i, line in enumerate(controls):
-            self.screen.blit(line, line.get_rect(center=(WIDTH / 2, 195 + i * 32)))
-        self.screen.blit(start_prompt, start_prompt.get_rect(center=(WIDTH / 2, 430)))
+            self.screen.blit(line, line.get_rect(center=(WIDTH / 2, 195 + i * 30)))
+        self.screen.blit(start_prompt, start_prompt.get_rect(center=(WIDTH / 2, 450)))
 
     def draw(self):
         if self.state == "TITLE":
@@ -1332,9 +1484,10 @@ class ArcadeGame:
             self.draw_skaters_and_puck()
             self.draw_hit_particles()
             self.draw_hud()
+            self.draw_touch_controls()
         pygame.display.flip()
 
-    def run(self):
+    async def run(self):
         running = True
         while running:
             for event in pygame.event.get():
@@ -1353,11 +1506,28 @@ class ArcadeGame:
                         self.user_deke()
                     elif self.state == "PLAYING" and event.key == pygame.K_c:
                         self.user_check()
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    self.handle_touch_start("mouse", event.pos)
+                elif event.type == pygame.MOUSEMOTION:
+                    self.handle_touch_drag("mouse", event.pos)
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    self.handle_touch_end("mouse")
+                elif event.type == pygame.FINGERDOWN:
+                    self.handle_touch_start((event.touch_id, event.finger_id), (event.x * WIDTH, event.y * HEIGHT))
+                elif event.type == pygame.FINGERMOTION:
+                    self.handle_touch_drag((event.touch_id, event.finger_id), (event.x * WIDTH, event.y * HEIGHT))
+                elif event.type == pygame.FINGERUP:
+                    self.handle_touch_end((event.touch_id, event.finger_id))
             self.step()
             self.draw()
             self.clock.tick(FPS)
+            await asyncio.sleep(0)  # yield to the browser's event loop under pygbag/WASM
         pygame.quit()
 
 
+async def main():
+    await ArcadeGame().run()
+
+
 if __name__ == "__main__":
-    ArcadeGame().run()
+    asyncio.run(main())
